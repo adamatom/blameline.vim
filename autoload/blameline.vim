@@ -13,10 +13,8 @@ let s:blameline_date_format = get(g:, 'blameline_date_format', '%m/%d/%y %H:%M')
 let s:blameline_user_name = ''
 let s:blameline_user_email = ''
 let s:blameline_info_fields = filter(map(split(s:blameline_template, ' '), {key, val -> matchstr(val, '\m\C<\zs.\{-}\ze>')}), {idx, val -> val != ''})
+let s:prop_type_name = 'blameline_popup_marker'
 let s:debug = 0
-if exists('*prop_type_add')
-  let s:prop_type_name = 'blameline_popup_marker'
-endif
 
 
 function! s:Head(array) abort
@@ -37,35 +35,34 @@ function! s:IsFileInPath(file_path, path) abort
 endfunction
 
 
-function! s:DrawPopup(message, line, buffer) abort
+function! blameline#DrawPopup(message, line, buffer) abort
   let l:col = strlen(getline(a:line))
   let l:col = l:col == 0 ? 1 : l:col
   let l:propid = a:line . l:col
 
-  if empty(prop_type_get(s:prop_type_name, {'bufnr': a:buffer}))
-    call prop_type_add(s:prop_type_name, {'bufnr': a:buffer})
+  if empty(prop_type_get(s:prop_type_name, {}))
+    call prop_type_add(s:prop_type_name, {})
   endif
 
   call prop_add(a:line, l:col, {
         \ 'type': s:prop_type_name,
-        \ 'bufnr': a:buffer,
         \ 'length': 0,
         \ 'id': l:propid,
         \})
 
-  let l:popup_winid = popup_create(s:blameline_prefix . a:message, {
-        \ 'textprop': 'blameline_popup_marker',
-        \ 'textpropid': l:propid,
-        \ 'line': -1,
-        \ 'col': l:col == 1 ? 1 : 2,
-        \ 'fixed': 1,
-        \ 'wrap': 0,
-        \ 'highlight': 'Blameline'
+  let l:popup_winid = popup_create(s:blameline_prefix . a:message, #{
+        \ textprop: s:prop_type_name,
+        \ textpropid: l:propid,
+        \ line: -1,
+        \ col: l:col == 1 ? 1 : 2,
+        \ fixed: 1,
+        \ wrap: 0,
+        \ highlight: 'Blameline'
         \})
 endfunction
 
 
-function! s:GenerateShowCallback(buffer, line) abort
+function! blameline#GenerateShowCallback(buffer, line) abort
 
   function! s:ShowCallback(channel) closure
     let l:result = ''
@@ -125,7 +122,7 @@ function! s:GenerateShowCallback(buffer, line) abort
       let l:message = substitute(l:message, '\m\C<' . field . '>', l:info[field], 'g')
     endfor
 
-    call s:DrawPopup(l:message, a:line, a:buffer)
+    call blameline#DrawPopup(l:message, a:line, a:buffer)
     unlet s:job_id
   endfunction
 
@@ -157,17 +154,20 @@ function! blameline#Show() abort
   if s:debug == 1
     echom l:command
   endif
-  let s:job_id = job_start(l:command, {
-        \ 'close_cb': s:GenerateShowCallback(l:buffer_number, l:line),
-        \ 'in_io': 'buffer',
-        \ 'in_buf': l:buffer_number,
-        \})
+  try
+    let s:job_id = job_start(l:command, {
+          \ 'close_cb': blameline#GenerateShowCallback(l:buffer_number, l:line),
+          \ 'in_io': 'buffer',
+          \ 'in_buf': l:buffer_number,
+          \})
+  catch /^Vim\%((\a\+)\)\=:E631:/
+  endtry
 endfunction
 
 
 function! blameline#Hide() abort
   let l:current_buffer_number = bufnr('')
-  if !empty(prop_type_get(s:prop_type_name, {'bufnr': l:current_buffer_number}))
+  if !empty(prop_type_get(s:prop_type_name, {}))
     call prop_remove({
           \ 'type': s:prop_type_name,
           \ 'bufnr': l:current_buffer_number,
@@ -237,8 +237,8 @@ function! blameline#Init() abort
 
   augroup blameline
     autocmd!
-    autocmd BufEnter,BufWritePost,CursorMoved * :call blameline#Refresh()
-    autocmd CursorMovedI * :call blameline#Hide()
+    autocmd BufWritePost,CursorMoved * :call blameline#Refresh()
+"    autocmd CursorMovedI * :call blameline#Hide()
   augroup END
 endfunction
 
