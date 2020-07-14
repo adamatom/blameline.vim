@@ -10,12 +10,15 @@ let s:git_root = ''
 let s:blameline_prefix = get(g:, 'blameline_prefix', '   ')
 let s:blameline_template = get(g:, 'blameline_template', '<author>, <author-time> • <summary>')
 let s:blameline_date_format = get(g:, 'blameline_date_format', '%m/%d/%y %H:%M')
+let s:blameline_clip = get(g:, 'blameline_clip', 1)
 let s:blameline_user_name = ''
 let s:blameline_user_email = ''
 let s:blameline_info_fields = filter(map(split(s:blameline_template, ' '), {key, val -> matchstr(val, '\m\C<\zs.\{-}\ze>')}), {idx, val -> val != ''})
 let s:prop_type_name = 'blameline_popup_marker'
-let s:debug = 0
-
+let s:blameline_debug = 0
+let s:last_line = -1
+let s:last_buffer = -1
+let s:last_line_len = -1
 
 function! s:Head(array) abort
   if len(a:array) == 0
@@ -38,7 +41,17 @@ endfunction
 function! blameline#DrawPopup(message, line, buffer) abort
   let l:col = strlen(getline(a:line))
   let l:col = l:col == 0 ? 1 : l:col
-  let l:propid = a:line . l:col
+  let l:propid = a:line . l:col . winnr()
+  let l:visible_width = s:blameline_clip ? winwidth(0) - virtcol('$') - 7 : 0
+  let l:cursorcol = col('.')
+
+  if s:blameline_debug
+    echom "winwidth: " . winwidth(0) . " visible width: " . l:visible_width . " virtcol: " . virtcol('$')
+  endif
+
+  if s:blameline_clip && l:visible_width < 20
+    return
+  endif
 
   if empty(prop_type_get(s:prop_type_name, {}))
     call prop_type_add(s:prop_type_name, {})
@@ -50,13 +63,15 @@ function! blameline#DrawPopup(message, line, buffer) abort
         \ 'id': l:propid,
         \})
 
-  let l:popup_winid = popup_create(s:blameline_prefix . a:message, #{
+  let s:popup_winid = popup_create(s:blameline_prefix . a:message, #{
         \ textprop: s:prop_type_name,
         \ textpropid: l:propid,
         \ line: -1,
         \ col: l:col == 1 ? 1 : 2,
         \ fixed: 1,
+        \ maxwidth: l:visible_width,
         \ wrap: 0,
+        \ moved: [a:line, 0, l:col],
         \ highlight: 'Blameline'
         \})
 endfunction
@@ -67,7 +82,7 @@ function! blameline#GenerateShowCallback(buffer, line) abort
   function! s:ShowCallback(channel) closure
     let l:result = ''
 
-    while ch_status(a:channel, {'part': 'out'}) == 'buffered'
+    while exists('s:job_id') && ch_status(a:channel, {'part': 'out'}) == 'buffered'
       let l:result = l:result . "\n" . ch_read(a:channel)
     endwhile
 
@@ -75,8 +90,11 @@ function! blameline#GenerateShowCallback(buffer, line) abort
     if !exists('s:job_id') || len(l:lines) == 0
       return
     endif
+    unlet s:job_id
 
-    if s:debug == 1
+
+
+    if s:blameline_debug == 1
       echom l:lines
     endif
 
@@ -123,14 +141,13 @@ function! blameline#GenerateShowCallback(buffer, line) abort
     endfor
 
     call blameline#DrawPopup(l:message, a:line, a:buffer)
-    unlet s:job_id
   endfunction
 
   return funcref('s:ShowCallback')
 endfunction
 
 
-function! blameline#Show() abort
+function! blameline#Show(buffer_number, line) abort
   if g:blameline_enabled == 0
     return
   endif
@@ -146,19 +163,17 @@ function! blameline#Show() abort
   endif
 
   let l:path = shellescape(l:path)
-  let l:buffer_number = bufnr('')
-  let l:line = line('.')
 
-  let l:command = "bash -c \"git blame -w -p --contents - " . l:path . " -L " . l:line . ",+1 \""
+  let l:command = "bash -c \"git blame -w -p --contents - " . l:path . " -L " . a:line . ",+1 \""
 
-  if s:debug == 1
+  if s:blameline_debug
     echom l:command
   endif
   try
     let s:job_id = job_start(l:command, {
-          \ 'close_cb': blameline#GenerateShowCallback(l:buffer_number, l:line),
+          \ 'close_cb': blameline#GenerateShowCallback(a:buffer_number, a:line),
           \ 'in_io': 'buffer',
-          \ 'in_buf': l:buffer_number,
+          \ 'in_buf': a:buffer_number,
           \})
   catch /^Vim\%((\a\+)\)\=:E631:/
   endtry
@@ -166,11 +181,9 @@ endfunction
 
 
 function! blameline#Hide() abort
-  let l:current_buffer_number = bufnr('')
   if !empty(prop_type_get(s:prop_type_name, {}))
     call prop_remove({
           \ 'type': s:prop_type_name,
-          \ 'bufnr': l:current_buffer_number,
           \ 'all': 1,
           \})
   endif
@@ -182,13 +195,25 @@ function! blameline#Refresh() abort
     return
   endif
 
+  let l:buffer_number = bufnr('')
+  let l:line = line('.')
+  let l:line_len = strlen(getline(l:line))
+
+  if l:buffer_number == s:last_buffer && l:line == s:last_line && l:line_len == s:last_line_len
+    return
+  endif
+
+  let s:last_buffer = l:buffer_number
+  let s:last_line = l:line
+  let s:last_line_len = l:line_len
+
   call blameline#Hide()
   if exists('s:job_id')
-    call job_stop(s:job_id)
+    call job_stop(s:job_id, 'kill')
     unlet s:job_id
   endif
 
-  call blameline#Show()
+  call blameline#Show(l:buffer_number, l:line)
 endfunction
 
 
@@ -238,12 +263,18 @@ function! blameline#Init() abort
   augroup blameline
     autocmd!
     autocmd BufWritePost,CursorMoved * :call blameline#Refresh()
-"    autocmd CursorMovedI * :call blameline#Hide()
+    autocmd InsertEnter * :call blameline#Hide()
   augroup END
 endfunction
 
-function! blameline#Debug() abort
-  let s:debug = s:debug == 1 ? 0 : 1
+function! blameline#ToggleClipping() abort
+  let s:blameline_clip = s:blameline_clip ? 0 : 1
+  let s:last_line = -1
+  call blameline#Refresh()
+endfunction
+
+function! blameline#ToggleDebug() abort
+  let s:blameline_debug = s:blameline_debug ? 0 : 1
 endfunction
 
 
