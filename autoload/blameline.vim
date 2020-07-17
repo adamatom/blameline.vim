@@ -72,6 +72,7 @@ function! blameline#DrawPopup(message, line, buffer) abort
         \ maxwidth: l:visible_width,
         \ wrap: 0,
         \ moved: [a:line, 0, l:col],
+        \ zindex: 1,
         \ highlight: 'Blameline'
         \})
 endfunction
@@ -262,7 +263,7 @@ function! blameline#Init() abort
 
   augroup blameline
     autocmd!
-    autocmd BufWritePost,CursorMoved * :call blameline#Refresh()
+    autocmd BufWritePost,CursorHold * :call blameline#Refresh()
     autocmd InsertEnter * :call blameline#Hide()
   augroup END
 endfunction

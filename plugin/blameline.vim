@@ -11,7 +11,7 @@ let g:blameline_enabled = get(g:, 'blameline_enabled', 0)
 function! BlamelineToggle() abort
   if g:blameline_enabled == 0
     call blameline#Enable()
-    call blameline#Show()
+    call blameline#Refresh()
   else
     call blameline#Disable()
     call blameline#Hide()
